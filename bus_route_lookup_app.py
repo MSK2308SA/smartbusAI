@@ -1,19 +1,63 @@
-import pandas as pd
 import os
-import sys
+import pandas as pd
+import streamlit as st
 
-# ── Configuration ────────────────────────────────────────────────────────────
-# Update this path if you move the data file
+# ── Configuration ─────────────────────────────────────────────────────────────
 DATA_FILE = "bmtc_routes_with_stops.csv"
 SEPARATOR = " -> "
 
+# ── Theme Management ───────────────────────────────────────────────────────────
+if 'theme' not in st.session_state:
+    st.session_state.theme = 'light'
 
-# ── Data loading ─────────────────────────────────────────────────────────────
+def toggle_theme():
+    st.session_state.theme = 'dark' if st.session_state.theme == 'light' else 'light'
+    st.rerun()
+
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="SmartBus AI",
+    page_icon="🚌",
+    layout="centered",
+)
+
+# ── Minimal Theme Styling ─────────────────────────────────────────────────────
+theme_colors = {
+    'light': {
+        'bg': '#ffffff',
+        'text': '#1a1f2b',
+        'card': '#f8f9fa',
+        'border': '#dee2e6',
+        'success': '#d4edda',
+        'error': '#f8d7da'
+    },
+    'dark': {
+        'bg': '#0c0f14',
+        'text': '#e8eaf0',
+        'card': '#1a1f2b',
+        'border': '#252d3d',
+        'success': '#1e3a2f',
+        'error': '#3a1f23'
+    }
+}
+
+current_theme = theme_colors[st.session_state.theme]
+
+# Apply theme
+st.markdown(f"""
+<style>
+    .stApp {{
+        background-color: {current_theme['bg']};
+        color: {current_theme['text']};
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Data loading ──────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
 def load_data(filepath: str) -> pd.DataFrame:
-    """Load the BMTC routes Excel/CSV file into a DataFrame."""
     if not os.path.exists(filepath):
-        print(f"[ERROR] Data file not found: {filepath}")
-        sys.exit(1)
+        raise FileNotFoundError(f"Data file not found: {filepath}")
     try:
         df = pd.read_excel(filepath)
     except Exception:
@@ -23,104 +67,150 @@ def load_data(filepath: str) -> pd.DataFrame:
 
 
 # ── Core lookup ───────────────────────────────────────────────────────────────
-def find_routes(df: pd.DataFrame, bus_number: str) -> list[dict]:
-    """
-    Return all routes whose Route column matches bus_number (case-insensitive).
-    Each result dict has: route, stops (list), start, destination.
-    """
+def find_routes(df: pd.DataFrame, bus_number: str) -> list:
     query = bus_number.strip().upper()
     mask = df["Route"].astype(str).str.strip().str.upper() == query
     matches = df[mask]
-
     results = []
     for _, row in matches.iterrows():
         raw_stops = str(row["Stops (via)"]).strip()
         stops = [s.strip() for s in raw_stops.split(SEPARATOR) if s.strip()]
-        results.append(
-            {
-                "route": row["Route"],
-                "stops": stops,
-                "start": stops[0] if stops else "N/A",
-                "destination": stops[-1] if stops else "N/A",
-            }
-        )
+        results.append({
+            "route": row["Route"],
+            "stops": stops,
+            "start": stops[0] if stops else "N/A",
+            "destination": stops[-1] if stops else "N/A",
+            "total": len(stops),
+        })
     return results
 
 
-# ── Display ───────────────────────────────────────────────────────────────────
-def display_route(result: dict, index: int = 0, total: int = 1) -> None:
-    """Pretty-print a single route result."""
-    header = f"  Route: {result['route']}"
-    if total > 1:
-        header += f"  ({index + 1} of {total} variants)"
+# ── Header Section ────────────────────────────────────────────────────────────
+# Prominent App Header with Theme Toggle
+header_col1, header_col2 = st.columns([4, 1])
+with header_col1:
+    st.markdown(f"""
+    <h1 style='margin-bottom: 0px; color: {current_theme["text"]};'>
+        🚌 SmartBus AI
+    </h1>
+    <p style='margin-top: 5px; color: gray; font-size: 1.1rem;'>
+        BMTC Route Finder · Bengaluru
+    </p>
+    """, unsafe_allow_html=True)
 
-    width = 65
-    print("\n" + "═" * width)
-    print(header)
-    print("═" * width)
-    print(f"  🟢  Start       : {result['start']}")
-    print(f"  🔴  Destination : {result['destination']}")
-    print(f"  🚌  Total Stops : {len(result['stops'])}")
-    print("─" * width)
-    print("  STOP-BY-STOP ROUTE FLOW:")
-    print("─" * width)
+with header_col2:
+    st.write("")  # Spacing
+    theme_icon = "🌙 Dark" if st.session_state.theme == 'light' else "☀️ Light"
+    if st.button(theme_icon, key="theme_toggle", use_container_width=True):
+        toggle_theme()
 
-    for i, stop in enumerate(result["stops"]):
-        if i == 0:
-            prefix = "  🟢 START  "
-        elif i == len(result["stops"]) - 1:
-            prefix = "  🔴 END    "
-        else:
-            prefix = f"  {i:>3}.       "
-        print(f"{prefix} {stop}")
-        if i < len(result["stops"]) - 1:
-            print("              ↓")
+st.divider()
 
-    print("═" * width)
+# ── Hero Section ───────────────────────────────────────────────────────────────
+st.subheader("Find your route, stop by stop.")
+st.write("Enter a BMTC bus number to see the full route and all intermediate stops.")
 
-
-def list_all_routes(df: pd.DataFrame) -> None:
-    """Print the first 20 unique route names as a hint."""
-    routes = df["Route"].astype(str).str.strip().unique()
-    print(f"\n  Total routes in dataset: {len(routes)}")
-    print("  Sample routes:", ", ".join(routes[:20]), "…")
-
-
-# ── Main interaction loop ─────────────────────────────────────────────────────
-def main() -> None:
-    print("\n" + "=" * 65)
-    print("        BMTC BUS ROUTE LOOKUP")
-    print("=" * 65)
-
+# Load data
+try:
     df = load_data(DATA_FILE)
-    print(f"  ✅ Loaded {len(df)} routes from '{DATA_FILE}'")
+    data_ok = True
+except FileNotFoundError as e:
+    st.error(f"⚠️ {e}")
+    data_ok = False
 
-    while True:
-        print()
-        bus_input = input("  Enter bus number (or 'list' to browse / 'quit' to exit): ").strip()
+# Search form
+if data_ok:
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        bus_input = st.text_input(
+            label="Bus number",
+            placeholder="e.g. 242-LA, 500C, D35G-BVRH…",
+            label_visibility="collapsed",
+            key="bus_input",
+        )
+    with col2:
+        search_clicked = st.button("Search", key="search_btn", use_container_width=True, type="primary")
 
-        if bus_input.lower() in ("quit", "exit", "q"):
-            print("\n  Goodbye! 🚌\n")
-            break
-
-        if bus_input.lower() == "list":
-            list_all_routes(df)
-            continue
-
-        if not bus_input:
-            print("  ⚠  Please enter a bus number.")
-            continue
-
-        results = find_routes(df, bus_input)
+    query = bus_input.strip()
+    
+    if not query:
+        st.info("👆 Type a bus number above to view its route.")
+    else:
+        results = find_routes(df, query)
 
         if not results:
-            print(f"\n  ❌ No route found for bus number '{bus_input}'.")
-            print("     Tip: type 'list' to see available routes.")
-            continue
-
-        for idx, result in enumerate(results):
-            display_route(result, index=idx, total=len(results))
-
-
-if __name__ == "__main__":
-    main()
+            st.error(f"❌ No route found for **{query.upper()}**. Check the bus number and try again.")
+        else:
+            st.success(f"Found {len(results)} route variant(s) for bus **{query.upper()}**")
+            
+            for idx, r in enumerate(results):
+                # Route card
+                with st.container(border=True):
+                    # Header: Route number and metadata
+                    c1, c2 = st.columns([3, 1])
+                    with c1:
+                        st.markdown(f"### 🚍 {r['route']}")
+                    with c2:
+                        if len(results) > 1:
+                            st.caption(f"Variant {idx + 1} of {len(results)}")
+                        st.markdown(f"**🚏 {r['total']} stops**")
+                    
+                    st.divider()
+                    
+                    # Quick Summary
+                    sum_col1, sum_col2 = st.columns(2)
+                    with sum_col1:
+                        st.markdown("**Origin**")
+                        st.markdown(f"🟢 {r['start']}")
+                    with sum_col2:
+                        st.markdown("**Destination**")
+                        st.markdown(f"🔴 {r['destination']}")
+                    
+                    st.divider()
+                    
+                    # VERTICAL ROUTE FLOW
+                    st.markdown("#### 🗺️ Route Flow")
+                    
+                    stops = r['stops']
+                    total_stops = len(stops)
+                    
+                    for i, stop in enumerate(stops):
+                        # Determine styling based on position
+                        if i == 0:
+                            # First stop: Green circle + location pin + bold + Start label
+                            st.markdown(f"""
+                            <div style='display: flex; align-items: center; gap: 8px; margin: 8px 0;'>
+                                <span style='font-size: 1.2rem;'>🟢</span>
+                                <span style='font-size: 1.2rem;'>📍</span>
+                                <span style='font-weight: bold; font-size: 1.1rem;'>{stop}</span>
+                                <span style='color: gray; font-size: 0.9rem; margin-left: 8px;'>(Start)</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        elif i == total_stops - 1:
+                            # Last stop: Red circle + location pin + bold + End label
+                            st.markdown(f"""
+                            <div style='display: flex; align-items: center; gap: 8px; margin: 8px 0;'>
+                                <span style='font-size: 1.2rem;'>🔴</span>
+                                <span style='font-size: 1.2rem;'>📍</span>
+                                <span style='font-weight: bold; font-size: 1.1rem;'>{stop}</span>
+                                <span style='color: gray; font-size: 0.9rem; margin-left: 8px;'>(End)</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            # Middle stops: Location pin only
+                            st.markdown(f"""
+                            <div style='display: flex; align-items: center; gap: 8px; margin: 8px 0; padding-left: 4px;'>
+                                <span style='font-size: 1.1rem;'>📍</span>
+                                <span style='font-size: 1.05rem;'>{stop}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        # Arrow down (between stops, not after last)
+                        if i < total_stops - 1:
+                            st.markdown("""
+                            <div style='text-align: left; padding-left: 24px; color: gray; font-size: 1.2rem; margin: 4px 0;'>
+                                ⬇️
+                            </div>
+                            """, unsafe_allow_html=True)
+                
+                st.write("")  # Spacing between cards
